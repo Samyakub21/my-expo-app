@@ -44,7 +44,8 @@ import {
 import { useRouter } from 'expo-router';
 
 // FIREBASE
-import { auth, db, signOut } from '../../firebaseConfig';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions, signOut } from '../../firebaseConfig';
 
 import {
   addDoc,
@@ -64,8 +65,7 @@ import {
 import { useUser } from '../../context/UserContext';
 import { registerForPushNotificationsAsync, sendLocalNotification } from '../../services/notifications';
 // Security Services
-import { validateAIPrompt, sanitizeString } from '../../services/validation';
-import { RateLimitService } from '../../services/rateLimit';
+import { sanitizeString, validateAIPrompt } from '../../services/validation';
 
 // --- DEFINITIONS ---
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -161,47 +161,34 @@ export default function HomeScreen() {
       return promptValidation.error || "Invalid prompt. Try again.";
     }
     
-    // Check rate limit for AI calls
-    const rateLimitCheck = await RateLimitService.checkRateLimit(
-      'AI_ROAST',
-      user.uid
-    );
-    
-    if (!rateLimitCheck.allowed) {
-      const waitMins = Math.ceil((rateLimitCheck.waitTimeMs || 60000) / 60000);
-      return `Whoa slow down! 🐢 You've used up your AI credits. Try again in ${waitMins} min(s).`;
-    }
-    
     try {
-      // Sanitize the prompt before sending
+      // Use Firebase Cloud Function for secure AI calls
+      const generateAiRoast = httpsCallable(functions, 'generateAiRoast');
       const sanitizedPrompt = sanitizeString(promptValidation.sanitizedValue || prompt);
       
-      const response = await fetch('https://gemini-proxy-pi-steel.vercel.app/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt: sanitizedPrompt }),
-      });
+      const result = await generateAiRoast({ prompt: sanitizedPrompt });
+      const data = result.data as { success: boolean; text?: string; remainingRequests?: number; error?: string };
       
-      // Check if response is OK before parsing
-      if (!response.ok) {
-        console.log("Proxy returned error status:", response.status);
-        return "AI service is busy. Try again later.";
+      if (data.success && data.text) {
+        return data.text;
       }
       
-      const text = await response.text();
-      try {
-        const data = JSON.parse(text);
-        return data.text || "AI is napping. Try later.";
-      } catch {
-        // Response wasn't JSON
-        console.log("Proxy returned non-JSON:", text.substring(0, 100));
-        return "AI service unavailable. Try again later.";
+      return data.error || "AI couldn't process that. Try again.";
+    } catch (error: any) {
+      console.log("AI Cloud Function Error:", error?.message || error);
+      
+      // Handle specific error codes
+      if (error?.code === 'functions/resource-exhausted') {
+        return "Whoa slow down! 🐢 You've used up your AI credits. Try again later.";
       }
-    } catch (error) {
-      console.log("Proxy Error:", error);
-      return "AI brain freeze. Try again.";
+      if (error?.code === 'functions/unauthenticated') {
+        return "You need to be logged in first.";
+      }
+      if (error?.code === 'functions/unavailable') {
+        return "AI service is temporarily unavailable. Try again in a moment.";
+      }
+      
+      return "AI couldn't connect. Check your internet and try again.";
     }
   };
   // NEW: Budget UI state
@@ -701,13 +688,20 @@ export default function HomeScreen() {
 
 const AiChatModal = ({ visible, onClose, transactions, isConnected, onGetRoast }: { visible: any; onClose: any; transactions: any; isConnected: any; onGetRoast: any; }): React.JSX.Element => {
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState([{ id: 1, text: "Yo! I'm DhanVayu AI. Ask me about your spending or how to get rich.", isBot: true }]);
+  const [messages, setMessages] = useState([{ id: 1, text: "Hey there! 👋 I'm your DhanVayu AI assistant. Ask me anything about your spending, savings tips, or how to grow your wealth!", isBot: true }]);
   const [loading, setLoading] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  const handleSend = async () => {
+  // Quick action suggestions
+  const quickActions = [
+    "Roast my spending 🔥",
+    "How can I save more? 💰",
+    "Analyze my habits 📊",
+  ];
+
+  const handleSend = async (customPrompt?: string) => {
     try {
-      const trimmedInput = input.trim();
+      const trimmedInput = customPrompt || input.trim();
       if (!trimmedInput) return;
       
       // Basic input length check
@@ -746,41 +740,328 @@ const AiChatModal = ({ visible, onClose, transactions, isConnected, onGetRoast }
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-      <View style={styles.container}>
-        <View style={styles.aiHeader}>
-          <Text style={styles.chatTitle}>Ask DhanVayu 🤖</Text>
-          <TouchableOpacity onPress={onClose}><X size={24} color="white" /></TouchableOpacity>
-        </View>
+    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
+      <View style={aiChatStyles.container}>
+        {/* Gradient Header */}
+        <LinearGradient
+          colors={['rgba(139, 92, 246, 0.3)', 'rgba(217, 70, 239, 0.1)', 'transparent']}
+          style={aiChatStyles.headerGradient}
+        >
+          <View style={aiChatStyles.header}>
+            <TouchableOpacity 
+              onPress={onClose} 
+              style={aiChatStyles.backButton}
+              activeOpacity={0.7}
+            >
+              <X size={22} color="white" />
+            </TouchableOpacity>
+            <View style={aiChatStyles.headerCenter}>
+              <View style={aiChatStyles.aiAvatar}>
+                <Sparkles size={20} color={THEME.accent} />
+              </View>
+              <View>
+                <Text style={aiChatStyles.headerTitle}>DhanVayu AI</Text>
+                <Text style={aiChatStyles.headerSubtitle}>
+                  {isConnected ? '● Online' : '○ Offline'}
+                </Text>
+              </View>
+            </View>
+            <View style={{ width: 44 }} />
+          </View>
+        </LinearGradient>
+
+        {/* Chat Messages */}
         <ScrollView
-          style={styles.chatBody}
-          contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+          style={aiChatStyles.chatBody}
+          contentContainerStyle={aiChatStyles.chatContent}
           ref={scrollViewRef}
           onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+          showsVerticalScrollIndicator={false}
         >
-          {messages.map(msg => (
-            <View key={msg.id} style={[styles.msgBubble, msg.isBot ? styles.botBubble : styles.userBubble]}>
-              <Text style={msg.isBot ? styles.btnText : styles.userText}>{msg.text}</Text>
+          {messages.map((msg, index) => (
+            <View 
+              key={msg.id} 
+              style={[
+                aiChatStyles.msgContainer,
+                msg.isBot ? aiChatStyles.botMsgContainer : aiChatStyles.userMsgContainer
+              ]}
+            >
+              {msg.isBot && (
+                <View style={aiChatStyles.botAvatarSmall}>
+                  <Sparkles size={14} color={THEME.accent} />
+                </View>
+              )}
+              <View style={[aiChatStyles.msgBubble, msg.isBot ? aiChatStyles.botBubble : aiChatStyles.userBubble]}>
+                <Text style={msg.isBot ? aiChatStyles.botText : aiChatStyles.userText}>{msg.text}</Text>
+              </View>
             </View>
           ))}
-          {loading && <ActivityIndicator color={THEME.accent} style={{ alignSelf: 'flex-start', marginLeft: 20 }} />}
+          
+          {loading && (
+            <View style={[aiChatStyles.msgContainer, aiChatStyles.botMsgContainer]}>
+              <View style={aiChatStyles.botAvatarSmall}>
+                <Sparkles size={14} color={THEME.accent} />
+              </View>
+              <View style={[aiChatStyles.msgBubble, aiChatStyles.botBubble, aiChatStyles.typingBubble]}>
+                <ActivityIndicator color={THEME.accent} size="small" />
+                <Text style={aiChatStyles.typingText}>Thinking...</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Quick Actions - show only if few messages */}
+          {messages.length <= 2 && !loading && (
+            <View style={aiChatStyles.quickActionsContainer}>
+              <Text style={aiChatStyles.quickActionsLabel}>Try asking:</Text>
+              <View style={aiChatStyles.quickActions}>
+                {quickActions.map((action, idx) => (
+                  <TouchableOpacity 
+                    key={idx} 
+                    style={aiChatStyles.quickActionBtn}
+                    onPress={() => handleSend(action)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={aiChatStyles.quickActionText}>{action}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
         </ScrollView>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.chatInputArea}>
-          <TextInput
-            style={styles.chatInput}
-            placeholder={isConnected ? "Ask anything..." : "Offline mode..."}
-            placeholderTextColor="#71717a"
-            value={input}
-            onChangeText={setInput}
-            editable={isConnected ? true : false} />
-          <TouchableOpacity onPress={handleSend} style={[styles.sendBtn, !isConnected && { backgroundColor: '#3f3f46' }]} disabled={!isConnected}>
-            <Send size={20} color={isConnected ? "white" : "#71717a"} />
-          </TouchableOpacity>
+
+        {/* Input Area */}
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+          style={aiChatStyles.inputContainer}
+        >
+          <View style={aiChatStyles.inputWrapper}>
+            <TextInput
+              style={aiChatStyles.input}
+              placeholder={isConnected ? "Ask me anything..." : "You're offline..."}
+              placeholderTextColor="#52525b"
+              value={input}
+              onChangeText={setInput}
+              editable={isConnected}
+              multiline
+              maxLength={500}
+              onSubmitEditing={() => handleSend()}
+            />
+            <TouchableOpacity 
+              onPress={() => handleSend()} 
+              style={[
+                aiChatStyles.sendButton,
+                (!isConnected || !input.trim()) && aiChatStyles.sendButtonDisabled
+              ]} 
+              disabled={!isConnected || !input.trim()}
+              activeOpacity={0.7}
+            >
+              <LinearGradient
+                colors={(!isConnected || !input.trim()) ? ['#3f3f46', '#3f3f46'] : [THEME.primary, THEME.accent]}
+                start={{x: 0, y: 0}}
+                end={{x: 1, y: 1}}
+                style={aiChatStyles.sendButtonGradient}
+              >
+                <Send size={18} color="white" />
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+          <Text style={aiChatStyles.disclaimer}>AI responses are for guidance only. Not financial advice.</Text>
         </KeyboardAvoidingView>
       </View>
     </Modal>
   );
-}
+};
+
+// Dedicated styles for AI Chat Modal
+const aiChatStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+  },
+  headerGradient: {
+    paddingTop: Platform.OS === 'ios' ? 60 : StatusBar.currentHeight ? StatusBar.currentHeight + 10 : 50,
+    paddingBottom: 20,
+    paddingHorizontal: 16,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  headerCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  aiAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(217, 70, 239, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(217, 70, 239, 0.3)',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: 'white',
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: THEME.success,
+    fontWeight: '500',
+  },
+  chatBody: {
+    flex: 1,
+  },
+  chatContent: {
+    padding: 16,
+    paddingBottom: 20,
+  },
+  msgContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    alignItems: 'flex-end',
+  },
+  botMsgContainer: {
+    justifyContent: 'flex-start',
+  },
+  userMsgContainer: {
+    justifyContent: 'flex-end',
+  },
+  botAvatarSmall: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(217, 70, 239, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(217, 70, 239, 0.2)',
+  },
+  msgBubble: {
+    maxWidth: '80%',
+    padding: 14,
+    borderRadius: 20,
+  },
+  botBubble: {
+    backgroundColor: THEME.card,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: '#27272a',
+  },
+  userBubble: {
+    backgroundColor: THEME.primary,
+    borderTopRightRadius: 6,
+    marginLeft: 'auto',
+  },
+  botText: {
+    color: THEME.text,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  userText: {
+    color: 'white',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  typingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  typingText: {
+    color: THEME.subText,
+    fontSize: 14,
+  },
+  quickActionsContainer: {
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#27272a',
+  },
+  quickActionsLabel: {
+    color: THEME.subText,
+    fontSize: 13,
+    marginBottom: 12,
+    fontWeight: '500',
+  },
+  quickActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  quickActionBtn: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+  },
+  quickActionText: {
+    color: THEME.primary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  inputContainer: {
+    backgroundColor: THEME.card,
+    borderTopWidth: 1,
+    borderTopColor: '#27272a',
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 12,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#27272a',
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    color: 'white',
+    fontSize: 16,
+    maxHeight: 120,
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+  },
+  sendButton: {
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  sendButtonDisabled: {
+    opacity: 0.6,
+  },
+  sendButtonGradient: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  disclaimer: {
+    color: '#52525b',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 10,
+  },
+})
 
 const InvestView = ({ t, riskProfile, setRiskProfile }: { t: any, riskProfile: any, setRiskProfile: any }) => (
   <View style={styles.content}>

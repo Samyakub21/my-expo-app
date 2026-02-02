@@ -2,19 +2,14 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import NetInfo from '@react-native-community/netinfo';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as LocalAuthentication from 'expo-local-authentication';
 import {
   AlertCircle,
   ArrowUpRight,
-  Calendar,
   Car,
   Coffee,
-  Delete,
   Edit2,
   Film,
-  Fingerprint,
   Languages,
-  Lock,
   LogOut,
   Megaphone,
   MessageSquare,
@@ -42,7 +37,6 @@ import {
   StatusBar, StyleSheet,
   Text,
   TextInput, TouchableOpacity,
-  Vibration,
   View
 } from 'react-native';
 // Add useFocusEffect to the imports
@@ -237,86 +231,8 @@ const AuthScreen = ({ onLogin }: { onLogin: any }) => {
   );
 };
 
-// --- LOCK SCREEN COMPONENT ---
-const LockScreen = ({ onUnlock }: { onUnlock: () => void }) => {
-  const [pin, setPin] = useState('');
-  const [hasBiometrics, setHasBiometrics] = useState(false);
-
-  useEffect(() => {
-    checkBiometrics();
-  }, []);
-
-  const checkBiometrics = async () => {
-    const compatible = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    setHasBiometrics(compatible && enrolled);
-    if (compatible && enrolled) {
-      promptBiometrics();
-    }
-  };
-
-  const promptBiometrics = async () => {
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: 'Unlock DhanVayu',
-      fallbackLabel: 'Use PIN',
-    });
-    if (result.success) {
-      onUnlock();
-    }
-  };
-
-  const handlePress = (val: string) => {
-    if (val === 'del') {
-      setPin(prev => prev.slice(0, -1));
-      return;
-    }
-    const newPin = pin + val;
-    setPin(newPin);
-    if (newPin.length === 4) {
-      if (newPin === '1234') { // DEFAULT PIN: 1234
-        onUnlock();
-      } else {
-        Vibration.vibrate();
-        setPin('');
-        Alert.alert("Wrong PIN", "Try 1234");
-      }
-    }
-  };
-
-  return (
-    <View style={styles.lockContainer}>
-      <LinearGradient colors={['#09090b', '#2e1065']} style={StyleSheet.absoluteFill} />
-      <View style={styles.lockIconContainer}>
-        <Lock size={40} color={THEME.accent} />
-      </View>
-      <Text style={styles.lockTitle}>Locked</Text>
-      <Text style={styles.lockSub}>Enter PIN to access your stash</Text>
-
-      <View style={styles.pinDots}>
-        {[0, 1, 2, 3].map(i => (
-          <View key={i} style={[styles.dot, pin.length > i && styles.dotActive]} />
-        ))}
-      </View>
-
-      <View style={styles.keypad}>
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-          <TouchableOpacity key={num} onPress={() => handlePress(num.toString())} style={styles.key}>
-            <Text style={styles.keyText}>{num}</Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity onPress={() => hasBiometrics ? promptBiometrics() : null} style={styles.key}>
-          <Fingerprint size={28} color={hasBiometrics ? THEME.primary : '#3f3f46'} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => handlePress('0')} style={styles.key}>
-          <Text style={styles.keyText}>0</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => handlePress('del')} style={styles.key}>
-          <Delete size={24} color={THEME.danger} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-};
+// --- LOCK SCREEN REMOVED ---
+// Lock screen is now handled securely in app/_layout.tsx with SecurePinService
 
 
 // --- 2. MAIN APP ---

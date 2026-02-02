@@ -8,11 +8,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Stack } from 'expo-router';
 import {
+  auth,
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   onAuthStateChanged,
-  signInWithCredential, signInWithEmailAndPassword
-} from 'firebase/auth';
+  signInWithCredential,
+  signInWithEmailAndPassword,
+} from '../firebaseConfig';
 import { AlertCircle, Delete, Fingerprint, Lock, Shield, Sparkles } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -28,7 +30,7 @@ import {
 } from 'react-native';
 import OnboardingScreen from '../components/OnboardingScreen';
 import { UserProvider } from '../context/UserContext';
-import { auth } from '../firebaseConfig';
+
 import { SecurePinService } from '../services/secureStorage';
 // Security Services
 import { validateEmail, validatePassword, sanitizeString } from '../services/validation';

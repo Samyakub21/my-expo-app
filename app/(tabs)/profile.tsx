@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { deleteUser, signOut, updateProfile } from 'firebase/auth';
+import { auth, db, deleteUser, signOut, updateProfile } from '../../firebaseConfig';
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import {
   AlertCircle,
@@ -37,7 +37,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { auth, db } from '../../firebaseConfig';
 import { SecurePinService } from '../../services/secureStorage';
 // Security & Validation Services
 import { validateDisplayName, sanitizeString } from '../../services/validation';

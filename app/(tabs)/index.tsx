@@ -44,8 +44,7 @@ import {
 import { useRouter } from 'expo-router';
 
 // FIREBASE
-import { auth, db } from '../../firebaseConfig';
-import { signOut } from 'firebase/auth';
+import { auth, db, signOut } from '../../firebaseConfig';
 
 import {
   addDoc,
@@ -184,10 +183,24 @@ export default function HomeScreen() {
         },
         body: JSON.stringify({ prompt: sanitizedPrompt }),
       });
-      const data = await response.json();
-      return data.text || "AI is napping. Try later.";
+      
+      // Check if response is OK before parsing
+      if (!response.ok) {
+        console.log("Proxy returned error status:", response.status);
+        return "AI service is busy. Try again later.";
+      }
+      
+      const text = await response.text();
+      try {
+        const data = JSON.parse(text);
+        return data.text || "AI is napping. Try later.";
+      } catch {
+        // Response wasn't JSON
+        console.log("Proxy returned non-JSON:", text.substring(0, 100));
+        return "AI service unavailable. Try again later.";
+      }
     } catch (error) {
-      console.error("Proxy Error:", error);
+      console.log("Proxy Error:", error);
       return "AI brain freeze. Try again.";
     }
   };
@@ -342,6 +355,7 @@ export default function HomeScreen() {
   // duplicate generateAiInsight removed (kept the useCallback version above)
 
   const handleDelete = async (id: any) => {
+    if (!user) return;
     Alert.alert("Delete Transaction", "This cannot be undone.", [
       { text: "Cancel", style: 'cancel' },
       { text: "Delete", style: 'destructive', onPress: async () => await deleteDoc(doc(db, 'users', user.uid, 'expenses', id)) }
@@ -381,6 +395,7 @@ export default function HomeScreen() {
 
   // Helper: save budgets
   const saveBudgets = async (newBudgets: Record<string, number>) => {
+    if (!user) return;
     try {
       const budgetDocRef = doc(db, 'users', user.uid, 'settings', 'budgets'); // Changed path
       await setDoc(budgetDocRef, newBudgets, { merge: true });

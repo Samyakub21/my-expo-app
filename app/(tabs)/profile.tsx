@@ -39,6 +39,8 @@ import {
 } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
 import { SecurePinService } from '../../services/secureStorage';
+// Security & Validation Services
+import { validateDisplayName, sanitizeString } from '../../services/validation';
 // IMPORT THE HOOK
 import { useUser } from '../../context/UserContext';
 
@@ -243,11 +245,28 @@ export default function ProfileScreen() {
 
   const handleUpdateProfile = async () => {
     if (!user) return;
+    
+    // Validate display name
+    const nameValidation = validateDisplayName(displayName);
+    if (!nameValidation.isValid) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Invalid Name", nameValidation.error || "Please enter a valid name");
+      return;
+    }
+    
+    // Sanitize the name
+    const sanitizedName = nameValidation.sanitizedValue || sanitizeString(displayName);
+    
     setLoading(true);
     try {
-      await updateProfile(user, { displayName });
+      await updateProfile(user, { displayName: sanitizedName });
+      setDisplayName(sanitizedName);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Profile updated!");
-    } catch (e) { Alert.alert("Error", (e as Error).message); }
+    } catch (e) { 
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Error", (e as Error).message); 
+    }
     setLoading(false);
   };
 

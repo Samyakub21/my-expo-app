@@ -30,6 +30,9 @@ import OnboardingScreen from '../components/OnboardingScreen';
 import { UserProvider } from '../context/UserContext';
 import { auth } from '../firebaseConfig';
 import { SecurePinService } from '../services/secureStorage';
+// Security Services
+import { validateEmail, validatePassword, sanitizeString } from '../services/validation';
+import { RateLimitService } from '../services/rateLimit';
 
 // --- CONSTANTS ---
 const THEME = {
@@ -47,6 +50,8 @@ const AuthScreen = ({ onLogin }: { onLogin: any }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     clientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
@@ -66,13 +71,80 @@ const AuthScreen = ({ onLogin }: { onLogin: any }) => {
     }
   }, [response]);
 
+  const validateInputs = () => {
+    let isValid = true;
+    setEmailError('');
+    setPasswordError('');
+
+    // Validate email
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.isValid) {
+      setEmailError(emailValidation.error || 'Invalid email');
+      isValid = false;
+    }
+
+    // Validate password
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      setPasswordError(passwordValidation.error || 'Invalid password');
+      isValid = false;
+    }
+
+    return isValid;
+  };
+
   const handleAuth = async () => {
-    if(!email || !password) return Alert.alert("Missing Info", "Fill in all fields.");
+    // Validate inputs first
+    if (!validateInputs()) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    // Check rate limit
+    const limitType = isLogin ? 'LOGIN_ATTEMPT' : 'SIGNUP_ATTEMPT';
+    const rateLimitCheck = await RateLimitService.checkRateLimit(limitType, email);
+    
+    if (!rateLimitCheck.allowed) {
+      const waitMins = Math.ceil((rateLimitCheck.waitTimeMs || 60000) / 60000);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Alert.alert(
+        "Too Many Attempts 🔒",
+        `Please wait ${waitMins} minute(s) before trying again.`
+      );
+      return;
+    }
+
     setLoading(true);
     try {
-      if (isLogin) await signInWithEmailAndPassword(auth, email, password);
-      else await createUserWithEmailAndPassword(auth, email, password);
-    } catch (e) { Alert.alert("Error", (e as Error).message); setLoading(false); }
+      // Sanitize email before sending
+      const sanitizedEmail = sanitizeString(email).toLowerCase();
+      
+      if (isLogin) {
+        await signInWithEmailAndPassword(auth, sanitizedEmail, password);
+      } else {
+        await createUserWithEmailAndPassword(auth, sanitizedEmail, password);
+      }
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) { 
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      
+      // User-friendly error messages
+      let errorMessage = e.message;
+      if (e.code === 'auth/user-not-found') {
+        errorMessage = "No account found with this email.";
+      } else if (e.code === 'auth/wrong-password') {
+        errorMessage = "Incorrect password. Try again.";
+      } else if (e.code === 'auth/email-already-in-use') {
+        errorMessage = "This email is already registered.";
+      } else if (e.code === 'auth/invalid-email') {
+        errorMessage = "Please enter a valid email address.";
+      } else if (e.code === 'auth/weak-password') {
+        errorMessage = "Password should be at least 6 characters.";
+      }
+      
+      Alert.alert("Error", errorMessage); 
+      setLoading(false); 
+    }
   };
 
   return (
@@ -90,13 +162,25 @@ const AuthScreen = ({ onLogin }: { onLogin: any }) => {
           <Text style={{textAlign:'center', color:'#52525b', marginVertical:10}}>OR</Text>
           
           <TextInput 
-            style={styles.input} placeholder="Email" placeholderTextColor="#52525b"
-            value={email} onChangeText={setEmail} autoCapitalize="none"
+            style={[styles.input, emailError ? styles.inputError : null]} 
+            placeholder="Email" 
+            placeholderTextColor="#52525b"
+            value={email} 
+            onChangeText={(t) => { setEmail(t); setEmailError(''); }} 
+            autoCapitalize="none"
+            keyboardType="email-address"
           />
+          {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
+          
           <TextInput 
-            style={styles.input} placeholder="Password" placeholderTextColor="#52525b"
-            value={password} onChangeText={setPassword} secureTextEntry 
+            style={[styles.input, passwordError ? styles.inputError : null]} 
+            placeholder="Password" 
+            placeholderTextColor="#52525b"
+            value={password} 
+            onChangeText={(t) => { setPassword(t); setPasswordError(''); }} 
+            secureTextEntry 
           />
+          {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
           
           <TouchableOpacity onPress={handleAuth} disabled={loading}>
             <LinearGradient colors={['#d946ef', '#8b5cf6']} style={styles.mainBtn}>
@@ -380,7 +464,7 @@ const PinSetupScreen = ({ onComplete }: { onComplete: () => void }) => {
       {error ? (
         <View style={styles.errorContainer}>
           <AlertCircle size={16} color={THEME.danger} />
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={styles.pinErrorText}>{error}</Text>
         </View>
       ) : null}
 
@@ -552,6 +636,8 @@ const styles = StyleSheet.create({
   googleBtn: { backgroundColor: 'white', padding: 16, borderRadius: 16, alignItems: 'center' },
   googleBtnText: { fontWeight: 'bold', color: 'black' },
   input: { backgroundColor: '#27272a', borderRadius: 16, marginBottom: 16, padding: 18, color: 'white' },
+  inputError: { borderColor: THEME.danger, borderWidth: 1, backgroundColor: 'rgba(239, 68, 68, 0.05)' },
+  errorText: { color: THEME.danger, fontSize: 12, marginTop: -10, marginBottom: 10, marginLeft: 4 },
   mainBtn: { padding: 18, borderRadius: 16, alignItems: 'center' },
   btnText: { color: 'white', fontWeight: 'bold' },
   // Lock screen styles
@@ -643,7 +729,7 @@ const styles = StyleSheet.create({
     borderRadius: 12, 
     marginTop: 10 
   },
-  errorText: { 
+  pinErrorText: { 
     color: THEME.danger, 
     fontSize: 13 
   },

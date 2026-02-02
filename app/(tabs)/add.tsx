@@ -1,7 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { addDoc, collection } from 'firebase/firestore';
 import {
+    AlertCircle,
     Calendar,
     Car,
     Coffee,
@@ -27,6 +30,9 @@ import {
 } from 'react-native';
 import { useUser } from '../../context/UserContext';
 import { auth, db } from '../../firebaseConfig';
+// Security Services
+import { validateTransaction, sanitizeForDatabase } from '../../services/validation';
+import { RateLimitService } from '../../services/rateLimit';
 
 // --- THEME & CONSTANTS (Matching index.tsx) ---
 const THEME = {
@@ -93,36 +99,62 @@ export default function AddScreen() {
   };
 
   const validate = () => {
-    let isValid = true;
-    let newErrors = { title: '', amount: '' };
+    // Use comprehensive validation service
+    const validation = validateTransaction({
+      title,
+      amount: parseFloat(amount) || 0,
+      category: txType === 'income' ? 'income' : category,
+      type: txType,
+      isRecurring,
+    });
 
-    if (!title.trim()) {
-      newErrors.title = "Description is required.";
-      isValid = false;
+    if (!validation.isValid) {
+      const newErrors = { title: '', amount: '' };
+      
+      // Map validation errors to form fields
+      validation.errors.forEach(err => {
+        if (err.includes('title') || err.includes('Title')) {
+          newErrors.title = err;
+        } else if (err.includes('amount') || err.includes('Amount')) {
+          newErrors.amount = err;
+        }
+      });
+      
+      setErrors(newErrors);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return false;
     }
 
-    const amtNum = parseFloat(amount);
-    if (!amount.trim()) {
-      newErrors.amount = "Enter an amount.";
-      isValid = false;
-    } else if (isNaN(amtNum) || amtNum <= 0) {
-      newErrors.amount = "Amount must be > 0.";
-      isValid = false;
-    }
-
-    setErrors(newErrors);
-    return isValid;
+    setErrors({ title: '', amount: '' });
+    return true;
   };
 
   const handleSave = async () => {
     if (!validate()) return;
     if (!user) return Alert.alert("Error", "You must be logged in.");
 
+    // Check rate limit for transaction creation
+    const rateLimitCheck = await RateLimitService.checkRateLimit(
+      'TRANSACTION_CREATE',
+      user.uid
+    );
+    
+    if (!rateLimitCheck.allowed) {
+      const waitMins = Math.ceil((rateLimitCheck.waitTimeMs || 60000) / 60000);
+      Alert.alert(
+        "Slow Down! 🐌",
+        `You're adding transactions too fast. Try again in ${waitMins} minute(s).`
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
     setLoading(true);
     const amountVal = parseFloat(amount);
 
-    const txData: any = {
-      title,
+    // Build transaction data
+    const txData: Record<string, any> = {
+      title: sanitizeForDatabase(title),
       amount: amountVal,
       category: txType === 'income' ? 'income' : category,
       type: txType,
@@ -138,12 +170,13 @@ export default function AddScreen() {
     try {
       await addDoc(collection(db, 'users', user.uid, 'expenses'), txData);
       
-      // Haptic feedback or simple alert could go here
-      // Navigate back to Home to see the new transaction
+      // Success feedback
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetForm();
       router.push('/(tabs)'); 
     } catch (e) {
       Alert.alert("Error", (e as Error).message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
     }

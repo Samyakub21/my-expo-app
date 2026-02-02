@@ -39,23 +39,13 @@ import {
   TextInput, TouchableOpacity,
   View
 } from 'react-native';
-// Add useFocusEffect to the imports
 
-// AUTH & FIREBASE
-import { makeRedirectUri } from 'expo-auth-session';
-import * as Google from 'expo-auth-session/providers/google';
+// NAVIGATION
 import { useRouter } from 'expo-router';
 
-// Add 'functions' to your firebaseConfig import
+// FIREBASE
 import { auth, db } from '../../firebaseConfig';
-
-import {
-  createUserWithEmailAndPassword,
-  GoogleAuthProvider,
-  signInWithCredential,
-  signInWithEmailAndPassword,
-  signOut
-} from 'firebase/auth';
+import { signOut } from 'firebase/auth';
 
 import {
   addDoc,
@@ -70,14 +60,13 @@ import {
 } from 'firebase/firestore';
  
 
-// NEW: Notifications
+// NOTIFICATIONS & CONTEXT
 // import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
-import { useUser } from '../../context/UserContext'; // ADD THIS IMPORT
+import { useUser } from '../../context/UserContext';
 import { registerForPushNotificationsAsync, sendLocalNotification } from '../../services/notifications';
-
-// --- 🔑 SECURE KEYS ---
-const GOOGLE_WEB_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-const GOOGLE_ANDROID_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
+// Security Services
+import { validateAIPrompt, sanitizeString } from '../../services/validation';
+import { RateLimitService } from '../../services/rateLimit';
 
 // --- DEFINITIONS ---
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -141,98 +130,9 @@ const getNextDueDate = (dateStr: string, frequency: string) => {
   return date.toISOString();
 };
 
-// --- 1. AUTH SCREEN ---
-const AuthScreen = ({ onLogin }: { onLogin: any }) => {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const redirectUri = makeRedirectUri({
-    scheme: 'dhanvayu'
-  });
-
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: GOOGLE_WEB_ID,
-    androidClientId: GOOGLE_ANDROID_ID,
-    redirectUri: redirectUri, 
-  });
-
-  React.useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      setLoading(true);
-      signInWithCredential(auth, credential).catch((e) => {
-        Alert.alert("Login Failed", (e as Error).message);
-        setLoading(false);
-      });
-    } else if (response?.type === 'error') {
-      Alert.alert("Google Sign-In Error", "Check your Google Cloud Console configuration.");
-    }
-  }, [response]);
-
-  const handleAuth = async () => {
-    if(!email || !password) return Alert.alert("Missing Info", "Please fill in all fields.");
-    setLoading(true);
-    try {
-      if (isLogin) await signInWithEmailAndPassword(auth, email, password);
-      else await createUserWithEmailAndPassword(auth, email, password);
-    } catch (e) { Alert.alert("Error", (e as Error).message); setLoading(false); }
-  };
-
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      <LinearGradient colors={['#2e1065', '#09090b']} style={StyleSheet.absoluteFill} />
-      
-      <View style={styles.authContent}>
-        <View style={styles.glassCard}>
-          <View style={styles.logoGlow}>
-            <Sparkles size={32} color={THEME.accent} fill={THEME.accent} />
-          </View>
-          <Text style={styles.authTitle}>{isLogin ? "Welcome Back" : "Join the Squad"}</Text>
-          <Text style={styles.authSub}>{TRANSLATIONS.en.login_sub}</Text>
-          
-          <TouchableOpacity 
-            style={styles.googleBtn} 
-            disabled={!request}
-            onPress={() => promptAsync()}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.googleBtnText}>G  {TRANSLATIONS.en.google_btn}</Text>
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.line} /><Text style={styles.orText}>OR</Text><View style={styles.line} />
-          </View>
-          
-          <TextInput 
-            style={styles.input} placeholder="Email" placeholderTextColor="#52525b"
-            value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address"
-          />
-          <TextInput 
-            style={styles.input} placeholder="Password" placeholderTextColor="#52525b"
-            value={password} onChangeText={setPassword} secureTextEntry 
-          />
-          
-          <TouchableOpacity onPress={handleAuth} disabled={loading} activeOpacity={0.8}>
-            <LinearGradient colors={['#d946ef', '#8b5cf6']} start={{x:0, y:0}} end={{x:1, y:1}} style={styles.mainBtn}>
-              {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnText}>{isLogin ? "Let's Go" : "Sign Up"}</Text>}
-            </LinearGradient>
-          </TouchableOpacity>
-          
-          <TouchableOpacity onPress={() => setIsLogin(!isLogin)} style={styles.switchBtn}>
-            <Text style={styles.switchText}>{isLogin ? "New here? Create Account" : "Already have an account? Login"}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
-};
-
-// --- LOCK SCREEN REMOVED ---
-// Lock screen is now handled securely in app/_layout.tsx with SecurePinService
+// --- AUTH SCREEN REMOVED ---
+// Authentication is now handled securely in app/_layout.tsx
+// This consolidates auth logic and improves code maintainability
 
 
 // --- 2. MAIN APP ---
@@ -251,15 +151,38 @@ export default function HomeScreen() {
   const [showAiChat, setShowAiChat] = useState(false);
   const [riskProfile, setRiskProfile] = useState('moderate');
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
+  
   const callGemini = async (prompt: string) => {
     if (!isConnected) return "You're offline. Connect to internet for roasted insights.";
+    if (!user) return "You need to be logged in first.";
+    
+    // Validate the prompt
+    const promptValidation = validateAIPrompt(prompt);
+    if (!promptValidation.isValid) {
+      return promptValidation.error || "Invalid prompt. Try again.";
+    }
+    
+    // Check rate limit for AI calls
+    const rateLimitCheck = await RateLimitService.checkRateLimit(
+      'AI_ROAST',
+      user.uid
+    );
+    
+    if (!rateLimitCheck.allowed) {
+      const waitMins = Math.ceil((rateLimitCheck.waitTimeMs || 60000) / 60000);
+      return `Whoa slow down! 🐢 You've used up your AI credits. Try again in ${waitMins} min(s).`;
+    }
+    
     try {
+      // Sanitize the prompt before sending
+      const sanitizedPrompt = sanitizeString(promptValidation.sanitizedValue || prompt);
+      
       const response = await fetch('https://gemini-proxy-pi-steel.vercel.app/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: sanitizedPrompt }),
       });
       const data = await response.json();
       return data.text || "AI is napping. Try later.";
@@ -769,19 +692,30 @@ const AiChatModal = ({ visible, onClose, transactions, isConnected, onGetRoast }
 
   const handleSend = async () => {
     try {
-      if (!input.trim()) return;
-      const userMsg = { id: Date.now(), text: input, isBot: false };
+      const trimmedInput = input.trim();
+      if (!trimmedInput) return;
+      
+      // Basic input length check
+      if (trimmedInput.length > 500) {
+        setMessages(prev => [...prev, { id: Date.now() + 1, text: "⚠️ Message too long! Keep it under 500 characters.", isBot: true }]);
+        return;
+      }
+      
+      const userMsg = { id: Date.now(), text: trimmedInput, isBot: false };
       setMessages(prev => [...prev, userMsg]);
       setInput('');
+      
       if (!isConnected) {
         setTimeout(() => {
           setMessages(prev => [...prev, { id: Date.now() + 1, text: "🚫 I'm offline rn. Try again when you have signal.", isBot: true }]);
         }, 500);
         return;
       }
+      
       setLoading(true);
       const txSummary = transactions.slice(0, 10).map((t: any) => `${t.title} (${t.amount})`).join(', ');
-      const prompt = `You are a Gen-Z financial advisor. My recent transactions: ${txSummary}. User Question: "${userMsg.text}" Keep your answer short, helpful, and use emojis.`;
+      const prompt = `You are a Gen-Z financial advisor. My recent transactions: ${txSummary}. User Question: "${trimmedInput}" Keep your answer short, helpful, and use emojis.`;
+      
       const response = await onGetRoast(prompt);
       if (response) {
         setMessages(prev => [...prev, { id: Date.now() + 1, text: response, isBot: true }]);

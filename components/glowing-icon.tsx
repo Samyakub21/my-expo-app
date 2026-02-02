@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 type Props = {
   children: React.ReactNode;
@@ -11,7 +11,7 @@ export default function GlowingIcon({
   children,
   color = '#FF5C7C',
   glow = false,
-}: Props): JSX.Element {
+}: Props): React.ReactElement {
   return (
     <View
       style={[

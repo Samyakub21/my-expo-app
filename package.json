@@ -12,6 +12,10 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
+    "@firebase/app": "^0.14.7",
+    "@firebase/app-compat": "^0.5.7",
+    "@firebase/app-types": "^0.9.3",
+    "@firebase/util": "^1.13.0",
     "@google/generative-ai": "^0.21.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.4.1",
@@ -40,7 +44,7 @@
     "expo-symbols": "~1.0.8",
     "expo-system-ui": "~6.0.9",
     "expo-web-browser": "~15.0.10",
-    "firebase": "^12.8.0",
+    "firebase": "^11.0.0",
     "lucide-react": "^0.454.0",
     "lucide-react-native": "^0.563.0",
     "phosphor-react-native": "^2.2.3",
@@ -63,7 +67,7 @@
     "@types/react": "~19.1.10",
     "babel-plugin-module-resolver": "^5.0.0",
     "babel-plugin-react-compiler": "^19.0.0-beta-ebf51a3-20250411",
-    "eslint": "^9.39.2",
+    "eslint": "^8.57.1",
     "eslint-config-expo": "~10.0.0",
     "typescript": "^5.1.3"
   },

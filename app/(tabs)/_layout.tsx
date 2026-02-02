@@ -5,10 +5,8 @@ import React from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native'; // Added Text
 
 import { HapticTab } from '../../components/haptic-tab';
-import { useColorScheme } from '../../hooks/use-color-scheme';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
 
   return (
     <LinearGradient

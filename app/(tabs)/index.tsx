@@ -40,7 +40,6 @@ import {
   Platform,
   ScrollView,
   StatusBar, StyleSheet,
-  Switch,
   Text,
   TextInput, TouchableOpacity,
   Vibration,
@@ -51,6 +50,7 @@ import {
 // AUTH & FIREBASE
 import { makeRedirectUri } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
+import { useRouter } from 'expo-router';
 
 // Add 'functions' to your firebaseConfig import
 import { auth, db } from '../../firebaseConfig';
@@ -327,11 +327,11 @@ export default function HomeScreen() {
 
   // Use global currency symbol from context
   const { symbol: currencySymbol } = useUser();
+  const router = useRouter();
 
   const [lang, setLang] = useState('en');
   const [activeTab] = useState('dashboard');
   const [transactions, setTransactions] = useState<any[]>([]);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showAiChat, setShowAiChat] = useState(false);
   const [riskProfile, setRiskProfile] = useState('moderate');
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
@@ -355,8 +355,6 @@ export default function HomeScreen() {
   // NEW: Budget UI state
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
-
-  const [editingTx, setEditingTx] = useState<any>(null);
 
   // Add split balance state
   const [owedToYou, setOwedToYou] = useState(0);
@@ -511,11 +509,6 @@ export default function HomeScreen() {
     ]);
   };
 
-  const handleEdit = (tx: any) => {
-    setEditingTx(tx);
-    setShowAddModal(true);
-  }
-
   // Budget breach checker - sends local notification when adding expense exceeds budget
   const checkBudgetBreach = (category: string, newAmount: number) => {
     const limit = budgets[category] || 0;
@@ -533,72 +526,6 @@ export default function HomeScreen() {
         `You've exceeded your ${category} limit by ₹${over}!`
       );
     }
-  };
-
-  const handleSave = async (data: any) => {
-    setShowAddModal(false);
-    
-    // Destructure type from data
-    const { title, amount, category, isRecurring, frequency, type } = data;
-    const amountVal = parseFloat(amount);
-
-    const txData: any = {
-      title,
-      amount: amountVal,
-      category,
-      isRecurring,
-      frequency,
-      type: type || 'expense'
-    };
-
-    if (isRecurring) {
-      txData.nextTriggerDate = getNextDueDate(new Date().toISOString(), frequency);
-    }
-
-    // Budget Check (Optimistic)
-    if (type === 'expense') checkBudgetBreach(category, amountVal);
-
-    try {
-      // 2. Prepare the Operation
-      let writeOp;
-      
-      if (editingTx) {
-        writeOp = updateDoc(doc(db, 'users', user.uid, 'expenses', editingTx.id), txData);
-      } else {
-        txData.date = new Date().toISOString();
-        writeOp = addDoc(collection(db, 'users', user.uid, 'expenses'), txData);
-      }
-
-      // 3. Deep Offline Handling
-      if (!isConnected) {
-        // DO NOT AWAIT writes when offline (prevents UI freeze)
-        Alert.alert("Saved Offline", "Transaction synced locally. Will upload when online.");
-        
-        // Attach Conflict/Error Handler for LATER (when connectivity returns)
-        writeOp.catch((error) => {
-          console.log("Background Sync Failed:", error);
-          // Simple Conflict Resolution: Alert user that a specific item failed
-          Alert.alert(
-            "Sync Conflict ⚠️", 
-            `Your offline transaction "${title}" failed to upload: ${error.message}. Please re-enter it.`
-          );
-        });
-      } else {
-        // Online: We can safely await to ensure server confirmation
-        await writeOp;
-        if (editingTx && !isConnected) Alert.alert("Updated Offline", "Changes synced locally."); // Fallback check
-      }
-
-      setEditingTx(null);
-
-    } catch (e) { 
-      Alert.alert("Error", (e as Error).message); 
-    }
-  };
-
-  const closeModal = () => {
-    setShowAddModal(false);
-    setEditingTx(null); 
   };
 
   // NEW: Fetch budgets for this user
@@ -845,7 +772,7 @@ export default function HomeScreen() {
                   return (
                     <TouchableOpacity 
                       key={tx.id} 
-                      onPress={() => handleEdit(tx)}
+                      onPress={() => {/* handleEdit(tx) */}}
                       onLongPress={() => handleDelete(tx.id)} 
                       style={styles.txCard} 
                       activeOpacity={0.7}
@@ -892,13 +819,12 @@ export default function HomeScreen() {
       </View>
       */}
 
-      <TouchableOpacity activeOpacity={0.8} onPress={() => { setEditingTx(null); setShowAddModal(true); }} style={styles.fabShadow}>
+      <TouchableOpacity activeOpacity={0.8} onPress={() => router.push('/(tabs)/add')} style={styles.fabShadow}>
         <LinearGradient colors={['#22d3ee', '#3b82f6']} style={styles.fab}>
           <Plus color="black" size={32} />
         </LinearGradient>
       </TouchableOpacity>
 
-      <AddModal visible={showAddModal} onClose={closeModal} onSave={handleSave} initialData={editingTx} currencySymbol={currencySymbol} />
       <AiChatModal 
         visible={showAiChat} 
         onClose={() => setShowAiChat(false)} 
@@ -1026,195 +952,6 @@ const InvestView = ({ t, riskProfile, setRiskProfile }: { t: any, riskProfile: a
     </TouchableOpacity>
   </View>
 );
-
-const AddModal = ({ visible, onClose, onSave, initialData, currencySymbol }: { visible: any, onClose: any, onSave: any, initialData?: any, currencySymbol: string }) => {
-  const [title, setTitle] = useState('');
-  const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState('food');
-  
-  // New State for Transaction Type
-  const [txType, setTxType] = useState<'expense' | 'income'>('expense');
-  
-  // Recurring States
-  const [isRecurring, setIsRecurring] = useState(false);
-  const [frequency, setFrequency] = useState('monthly');
-
-  const [errors, setErrors] = useState({ title: '', amount: '' });
-
-  // Reset or Populate form
-  useEffect(() => {
-    if (visible) {
-      if (initialData) {
-        setTitle(initialData.title);
-        setAmount(initialData.amount.toString());
-        setCategory(initialData.category || 'food');
-        setTxType(initialData.type || 'expense'); // Load existing type
-        setIsRecurring(initialData.isRecurring || false);
-        setFrequency(initialData.frequency || 'monthly');
-      } else {
-        // Defaults
-        setTitle('');
-        setAmount('');
-        setCategory('food');
-        setTxType('expense'); // Default to expense
-        setIsRecurring(false);
-        setFrequency('monthly');
-      }
-      setErrors({ title: '', amount: '' });
-    }
-  }, [visible, initialData]);
-
-  const validate = () => {
-    let isValid = true;
-    let newErrors = { title: '', amount: '' };
-
-    if (!title.trim()) {
-      newErrors.title = "Description is required.";
-      isValid = false;
-    }
-
-    const amtNum = parseFloat(amount);
-    if (!amount.trim()) {
-      newErrors.amount = "Enter an amount.";
-      isValid = false;
-    } else if (isNaN(amtNum) || amtNum <= 0) {
-      newErrors.amount = "Amount must be > 0.";
-      isValid = false;
-    }
-
-    setErrors(newErrors);
-    return isValid;
-  };
-
-  const handleSubmit = () => {
-    if (validate()) {
-      onSave({
-        title, 
-        amount, 
-        category: txType === 'income' ? 'income' : category, // Force category for income
-        type: txType,
-        isRecurring,
-        frequency
-      });
-    }
-  };
-
-  const handleClose = () => {
-    setErrors({ title: '', amount: '' });
-    onClose();
-  }
-
-  return (
-    <Modal transparent visible={visible} animationType="fade">
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalIndicator} />
-          
-          {/* TYPE TOGGLE */}
-          <View style={{flexDirection: 'row', backgroundColor: '#27272a', padding: 4, borderRadius: 12, marginBottom: 20}}>
-            <TouchableOpacity 
-              onPress={() => setTxType('expense')}
-              style={{flex: 1, padding: 10, borderRadius: 10, backgroundColor: txType === 'expense' ? '#ef4444' : 'transparent', alignItems: 'center'}}
-            >
-              <Text style={{fontWeight: 'bold', color: txType === 'expense' ? 'white' : '#71717a'}}>Expense 💸</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              onPress={() => setTxType('income')}
-              style={{flex: 1, padding: 10, borderRadius: 10, backgroundColor: txType === 'income' ? '#10b981' : 'transparent', alignItems: 'center'}}
-            >
-              <Text style={{fontWeight: 'bold', color: txType === 'income' ? 'white' : '#71717a'}}>Income 💰</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.modalTitle}>{initialData ? "Edit Transaction" : (txType === 'income' ? "Add Income" : "Add Expense")}</Text>
-          
-          <TextInput 
-            placeholder={txType === 'income' ? "Salary, Freelance, Gift..." : "What did you buy?"}
-            placeholderTextColor="#52525b" 
-            style={[styles.inputDark, errors.title ? styles.inputError : null]} 
-            value={title} 
-            onChangeText={(t) => { setTitle(t); if(errors.title) setErrors({...errors, title: ''}) }} 
-          />
-          {errors.title ? (
-            <View style={styles.errorRow}>
-              <AlertCircle size={14} color={THEME.danger} />
-              <Text style={styles.errorText}>{errors.title}</Text>
-            </View>
-          ) : null}
-          
-          <TextInput 
-            placeholder={`Amount (${currencySymbol})`} 
-            placeholderTextColor="#52525b" 
-            keyboardType="numeric" 
-            style={[styles.inputDark, errors.amount ? styles.inputError : null]} 
-            value={amount} 
-            onChangeText={(t) => { setAmount(t); if(errors.amount) setErrors({...errors, amount: ''}) }} 
-          />
-          {errors.amount ? (
-            <View style={styles.errorRow}>
-              <AlertCircle size={14} color={THEME.danger} />
-              <Text style={styles.errorText}>{errors.amount}</Text>
-            </View>
-          ) : null}
-
-          {/* RECURRING SECTION */}
-          <View style={styles.recurringBox}>
-            <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
-              <View style={{flexDirection:'row', alignItems:'center', gap: 8}}>
-                <Calendar size={18} color={THEME.primary} />
-                <Text style={{color: 'white', fontWeight: '600'}}>Repeat {txType === 'income' ? 'Income' : 'Bill'}?</Text>
-              </View>
-              <Switch 
-                value={isRecurring} 
-                onValueChange={setIsRecurring}
-                trackColor={{false: '#27272a', true: 'rgba(139, 92, 246, 0.3)'}}
-                thumbColor={isRecurring ? THEME.primary : '#52525b'}
-              />
-            </View>
-            
-            {isRecurring && (
-              <View style={{flexDirection:'row', gap: 8, marginTop: 12}}>
-                {['weekly', 'monthly', 'yearly'].map((freq) => (
-                  <TouchableOpacity 
-                    key={freq} 
-                    onPress={() => setFrequency(freq)}
-                    style={[styles.freqChip, frequency === freq && styles.freqChipActive]}
-                  >
-                    <Text style={[styles.freqText, frequency === freq && { color: 'white' }]}>
-                      {freq.charAt(0).toUpperCase() + freq.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-
-          {/* HIDE CATEGORIES IF INCOME */}
-          {txType === 'expense' && (
-            <>
-              <Text style={styles.catLabel}>Vibe Check</Text>
-              <View style={styles.catGrid}>
-                {CATEGORIES.map(cat => (
-                  <TouchableOpacity key={cat.id} onPress={() => setCategory(cat.id)} style={[styles.catOption, category === cat.id && styles.catOptionActive]}>
-                    <cat.icon size={20} color={category === cat.id ? 'black' : cat.color} />
-                    <Text style={[styles.catText, category === cat.id && {color: 'black'}]}>{cat.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </>
-          )}
-
-          <TouchableOpacity onPress={handleSubmit}>
-            <LinearGradient colors={txType === 'income' ? ['#10b981', '#059669'] : ['#22d3ee', '#3b82f6']} style={styles.mainBtn}>
-              <Text style={[styles.btnText, {color: txType === 'income' ? 'white' : 'black'}]}>{initialData ? "Update" : "Save"}</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleClose} style={{marginTop: 15, alignItems:'center'}}><Text style={{color:'#71717a'}}>Nevermind</Text></TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-};
 
 const BudgetModal = ({ visible, onClose, budgets, onSave, currencySymbol }: { visible: boolean, onClose: () => void, budgets: any, onSave: (b: any) => void, currencySymbol: string }) => {
   const [localBudgets, setLocalBudgets] = useState(budgets);
